@@ -3,10 +3,12 @@ import os
 import json
 import threading
 import time
-
-
+import traceback
 import ctypes
 from ctypes import wintypes
+from pynput.mouse import Controller as MouseController, Button
+
+mouse_controller = MouseController()
 
 user32=ctypes.windll.user32
 
@@ -31,10 +33,14 @@ class pyautogui:
     FAILSAFE=False
     @staticmethod
     def leftClick():
-        _send(MOUSEEVENTF_LEFTDOWN);_send(MOUSEEVENTF_LEFTUP)
+        # _send(MOUSEEVENTF_LEFTDOWN);_send(MOUSEEVENTF_LEFTUP)
+        mouse_controller.press( Button.left )
+        mouse_controller.release( Button.left )
     @staticmethod
     def rightClick():
-        _send(MOUSEEVENTF_RIGHTDOWN);_send(MOUSEEVENTF_RIGHTUP)
+        # _send(MOUSEEVENTF_RIGHTDOWN);_send(MOUSEEVENTF_RIGHTUP)
+        mouse_controller.press( Button.right )
+        mouse_controller.release( Button.right )
     @staticmethod
     def click(button="left"):
         (pyautogui.leftClick if button=="left" else pyautogui.rightClick)()
@@ -70,7 +76,7 @@ GREEN = "#6af7a0"
 # ---------------------------------------------------------------------------
 def get_macros_path():
     appdata = os.getenv("APPDATA") or os.path.expanduser("~")
-    dir_path = os.path.join(appdata, "AutoClicker")
+    dir_path = os.path.join(appdata, "SmartAutoClicker")
     os.makedirs(dir_path, exist_ok=True)
     return os.path.join(dir_path, "macros.json")
 
@@ -237,7 +243,7 @@ def _execute_block(block, respect_toggle):
                 run_macro(nested, respect_toggle)
     except Exception:
         # Une touche/valeur invalide ne doit pas planter le thread.
-        pass
+        traceback.print_exc()
 
 
 def run_macro(blocks, respect_toggle=True):
@@ -1332,7 +1338,7 @@ class AutoClickerApp:
                 x, y = pyautogui.position()
                 self.mouse_pos_label.configure(text=f"Position souris : {x}, {y}")
             except Exception:
-                pass
+                traceback.print_exc()
             self._refresh_status()
         self.root.after(100, self._update_mouse_position)
 
