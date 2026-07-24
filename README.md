@@ -55,3 +55,4 @@ python autoclicker.py
 
 - Les clics gauche et droit sont gérés indépendamment, ce qui évite les chevauchements de rafales sur le même bouton.
 - Le raccourci clavier par défaut est `Caps Lock`.
+- L'icône utilisée vient de icon8 : https://icons8.com/icon/koq8wWPPhKjP/autoclicker
