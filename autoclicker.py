@@ -111,6 +111,9 @@ ignore_synthetic = {
 # Verrou pour empêcher deux exécutions de macro simultanées.
 macro_lock = threading.Lock()
 
+# Permet d'interrompre une macro en cours (utile pour les boucles for/while).
+macro_stop_flag = threading.Event()
+
 # Référence vers l'app pour synchroniser l'UI depuis les hotkeys/listener.
 app_instance = None
 
@@ -153,41 +156,76 @@ def auto_clicker_worker():
             time.sleep(0.05)
 
 
-def run_macro(blocks):
-    """Exécute séquentiellement les blocs d'une macro."""
+def _macro_should_continue(respect_toggle):
+    """Détermine si une macro (ou une boucle en son sein) doit continuer."""
+    if macro_stop_flag.is_set():
+        return False
+    if respect_toggle and not (auto_clicker_active and click_mode == MODE_MACRO):
+        return False
+    return True
+
+
+def _execute_block(block, respect_toggle):
+    cmd = block.get("command")
+    val = block.get("value")
+    try:
+        if cmd == "keyboard":
+            kb.send(val)
+        elif cmd == "mouse":
+            pyautogui.click(button="left" if val == "left" else "right")
+        elif cmd == "mousemove":
+            x = int(val.get("x"))
+            y = int(val.get("y"))
+            pyautogui.moveTo(x, y)
+        elif cmd == "delay":
+            ms = int(val)
+            time.sleep(max(ms, 0) / 1000)
+        elif cmd == "for":
+            count = int(val.get("count", 1))
+            nested = val.get("blocks", [])
+            for _ in range(count):
+                if not _macro_should_continue(respect_toggle):
+                    break
+                run_macro(nested, respect_toggle)
+        elif cmd == "while":
+            condition = val.get("condition", "always")
+            key = val.get("key")
+            nested = val.get("blocks", [])
+            while _macro_should_continue(respect_toggle):
+                if condition == "key_held" and not (key and kb.is_pressed(key)):
+                    break
+                run_macro(nested, respect_toggle)
+    except Exception:
+        # Une touche/valeur invalide ne doit pas planter le thread.
+        pass
+
+
+def run_macro(blocks, respect_toggle=True):
+    """Exécute séquentiellement les blocs d'une macro (récursif pour les boucles)."""
     for block in blocks:
-        cmd = block.get("command")
-        val = block.get("value")
-        try:
-            if cmd == "keyboard":
-                kb.send(val)
-            elif cmd == "mouse":
-                pyautogui.click(button="left" if val == "left" else "right")
-            elif cmd == "mousemove":
-                x = int(val.get("x"))
-                y = int(val.get("y"))
-                pyautogui.moveTo(x, y)
-            elif cmd == "delay":
-                ms = int(val)
-                time.sleep(max(ms, 0) / 1000)
-        except Exception:
-            # Une touche/valeur invalide ne doit pas planter le thread.
-            continue
+        if not _macro_should_continue(respect_toggle):
+            break
+        _execute_block(block, respect_toggle)
 
 
-def start_macro_run(blocks):
+def start_macro_run(blocks, respect_toggle=True):
     if not blocks:
         return
     if not macro_lock.acquire(blocking=False):
         return
+    macro_stop_flag.clear()
 
     def _run():
         try:
-            run_macro(blocks)
+            run_macro(blocks, respect_toggle)
         finally:
             macro_lock.release()
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def stop_running_macro():
+    macro_stop_flag.set()
 
 
 def on_click(x, y, button, pressed):
@@ -247,11 +285,22 @@ threading.Thread(target=auto_clicker_worker, daemon=True).start()
 # ---------------------------------------------------------------------------
 # Interface graphique
 # ---------------------------------------------------------------------------
-BLOCK_TYPE_KEYBOARD = "Appuyer sur touche du clavier"
-BLOCK_TYPE_MOUSE = "Appuyer sur touche de la souris"
+BLOCK_TYPE_KEYBOARD = "Simuler une touche du clavier"
+BLOCK_TYPE_MOUSE = "Simuler une touche de la souris"
 BLOCK_TYPE_MOUSEMOVE = "Déplacer la souris"
-BLOCK_TYPE_DELAY = "Attendre (ms)"
-BLOCK_TYPES = [BLOCK_TYPE_KEYBOARD, BLOCK_TYPE_MOUSE, BLOCK_TYPE_MOUSEMOVE, BLOCK_TYPE_DELAY]
+BLOCK_TYPE_DELAY = "Attendre ? millisecondes"
+BLOCK_TYPE_FOR = "Répéter ? fois"
+BLOCK_TYPE_WHILE = "Répéter"
+BLOCK_TYPES = [
+    BLOCK_TYPE_KEYBOARD,
+    BLOCK_TYPE_MOUSE,
+    BLOCK_TYPE_MOUSEMOVE,
+    BLOCK_TYPE_DELAY,
+    BLOCK_TYPE_FOR,
+    BLOCK_TYPE_WHILE,
+]
+WHILE_COND_ALWAYS = "Toujours (jusqu'à arrêt)"
+WHILE_COND_KEY_HELD = "Tant qu'une touche est maintenue"
 
 NEW_MACRO_LABEL = "+ Nouvelle macro"
 
@@ -270,6 +319,8 @@ class AutoClickerApp:
 
         self.macros = load_macros()
         self.current_blocks = []
+        self._iid_location = {}
+        self._list_parent_iid = {}
 
         self._build_style()
         self._build_ui()
@@ -643,6 +694,10 @@ class AutoClickerApp:
             command=lambda: self.open_block_dialog()
         ).pack(side="left", padx=(0, 6))
         ttk.Button(
+            block_btns, text="+ Dans la boucle", style="Ghost.TButton",
+            command=self.add_block_inside_loop
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
             block_btns, text="Supprimer", style="Ghost.TButton", command=self.remove_block
         ).pack(side="left", padx=(0, 6))
         ttk.Button(
@@ -668,6 +723,9 @@ class AutoClickerApp:
         ).pack(side="left", padx=(0, 6))
         ttk.Button(
             macro_btns, text="Tester", style="Ghost.TButton", command=self.test_macro
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            macro_btns, text="Arrêter", style="Ghost.TButton", command=stop_running_macro
         ).pack(side="left")
 
         self.macro_error_label = ttk.Label(frame, text="", style="Dim.TLabel", foreground=RED)
@@ -675,7 +733,11 @@ class AutoClickerApp:
 
         ttk.Label(
             frame,
-            text="En mode actif, un clic (gauche ou droit) exécute la macro sélectionnée.",
+            text=(
+                "En mode actif, un clic (gauche ou droit) exécute la macro sélectionnée. "
+                "Sélectionne une boucle puis clique « + Dans la boucle » pour ajouter des "
+                "blocs à l'intérieur. « Arrêter » interrompt une boucle en cours."
+            ),
             style="Dim.TLabel",
             wraplength=340,
         ).grid(row=9, column=0, sticky="w", pady=(4, 0))
@@ -747,7 +809,7 @@ class AutoClickerApp:
         self._refresh_macro_selector()
 
     def test_macro(self):
-        start_macro_run(list(self.current_blocks))
+        start_macro_run(list(self.current_blocks), respect_toggle=False)
 
     # -- Gestion des blocs ----------------------------------------------------
     def _block_label(self, block):
@@ -763,45 +825,96 @@ class AutoClickerApp:
             return ("Déplacer souris", str(val))
         if cmd == "delay":
             return ("Attente", f"{val} ms")
+        if cmd == "for":
+            count = val.get("count", 1) if isinstance(val, dict) else 1
+            return ("Boucle Pour", f"× {count}")
+        if cmd == "while":
+            if isinstance(val, dict) and val.get("condition") == "key_held":
+                return ("Boucle Tant que", f"touche « {val.get('key', '?')} » maintenue")
+            return ("Boucle Tant que", "toujours (jusqu'à arrêt)")
         return (str(cmd), str(val))
 
     def _refresh_macro_tree(self):
         self.macro_tree.delete(*self.macro_tree.get_children())
-        for i, block in enumerate(self.current_blocks):
+        self._iid_location = {}
+        self._list_parent_iid = {}
+        self._insert_blocks(self.current_blocks, "")
+
+    def _insert_blocks(self, blocks_list, parent_iid):
+        self._list_parent_iid[id(blocks_list)] = parent_iid
+        for i, block in enumerate(blocks_list):
+            iid = f"{parent_iid}.{i}" if parent_iid else str(i)
             type_label, value_label = self._block_label(block)
-            self.macro_tree.insert("", "end", iid=str(i), values=(i + 1, type_label, value_label))
+            self.macro_tree.insert(
+                parent_iid, "end", iid=iid, values=(i + 1, type_label, value_label), open=True
+            )
+            self._iid_location[iid] = (blocks_list, i)
+            if block.get("command") in ("for", "while"):
+                nested = block.setdefault("value", {}).setdefault("blocks", [])
+                self._insert_blocks(nested, iid)
 
     def _on_tree_double_click(self, event):
         sel = self.macro_tree.selection()
         if not sel:
             return
-        self.open_block_dialog(edit_index=int(sel[0]))
+        loc = self._iid_location.get(sel[0])
+        if not loc:
+            return
+        self.open_block_dialog(edit_location=loc)
 
     def remove_block(self):
         sel = self.macro_tree.selection()
         if not sel:
             return
-        idx = int(sel[0])
-        del self.current_blocks[idx]
+        loc = self._iid_location.get(sel[0])
+        if not loc:
+            return
+        blocks_list, idx = loc
+        del blocks_list[idx]
         self._refresh_macro_tree()
 
     def move_block(self, direction):
         sel = self.macro_tree.selection()
         if not sel:
             return
-        idx = int(sel[0])
+        loc = self._iid_location.get(sel[0])
+        if not loc:
+            return
+        blocks_list, idx = loc
         new_idx = idx + direction
-        if 0 <= new_idx < len(self.current_blocks):
-            self.current_blocks[idx], self.current_blocks[new_idx] = (
-                self.current_blocks[new_idx],
-                self.current_blocks[idx],
-            )
+        if 0 <= new_idx < len(blocks_list):
+            blocks_list[idx], blocks_list[new_idx] = blocks_list[new_idx], blocks_list[idx]
+            parent_iid = self._list_parent_iid.get(id(blocks_list), "")
+            new_iid = f"{parent_iid}.{new_idx}" if parent_iid else str(new_idx)
             self._refresh_macro_tree()
-            self.macro_tree.selection_set(str(new_idx))
+            self.macro_tree.selection_set(new_iid)
 
-    def open_block_dialog(self, edit_index=None):
-        editing = edit_index is not None
-        existing_block = self.current_blocks[edit_index] if editing else None
+    def add_block_inside_loop(self):
+        sel = self.macro_tree.selection()
+        if not sel:
+            self.macro_error_label.configure(text="Sélectionne une boucle pour ajouter un bloc à l'intérieur.")
+            return
+        loc = self._iid_location.get(sel[0])
+        if not loc:
+            return
+        blocks_list, idx = loc
+        block = blocks_list[idx]
+        if block.get("command") not in ("for", "while"):
+            self.macro_error_label.configure(text="Sélectionne une boucle pour ajouter un bloc à l'intérieur.")
+            return
+        self.macro_error_label.configure(text="")
+        nested = block.setdefault("value", {}).setdefault("blocks", [])
+        self.open_block_dialog(target_list=nested)
+
+    def open_block_dialog(self, target_list=None, edit_location=None):
+        editing = edit_location is not None
+        if editing:
+            target_list, edit_index = edit_location
+            existing_block = target_list[edit_index]
+        else:
+            if target_list is None:
+                target_list = self.current_blocks
+            existing_block = None
 
         dialog = tk.Toplevel(self.root)
         dialog.title("Modifier le bloc" if editing else "Ajouter un bloc")
@@ -822,6 +935,8 @@ class AutoClickerApp:
                 "mouse": BLOCK_TYPE_MOUSE,
                 "mousemove": BLOCK_TYPE_MOUSEMOVE,
                 "delay": BLOCK_TYPE_DELAY,
+                "for": BLOCK_TYPE_FOR,
+                "while": BLOCK_TYPE_WHILE,
             }.get(cmd, BLOCK_TYPE_KEYBOARD)
 
         type_var = tk.StringVar(value=default_type)
@@ -942,11 +1057,90 @@ class AutoClickerApp:
         delay_var = tk.StringVar(value=delay_default)
         ttk.Entry(delay_frame, textvariable=delay_var).pack(fill="x", pady=(4, 0))
 
+        # -- Sous-panneau boucle Pour --
+        for_frame = ttk.Frame(value_container, style="TFrame")
+        ttk.Label(for_frame, text="Nombre d'itérations").pack(anchor="w")
+        for_default = "5"
+        if existing_block and existing_block.get("command") == "for":
+            for_default = str(existing_block.get("value", {}).get("count", 5))
+        for_count_var = tk.StringVar(value=for_default)
+        ttk.Entry(for_frame, textvariable=for_count_var).pack(fill="x", pady=(4, 0))
+        ttk.Label(
+            for_frame,
+            text="Ajoute ensuite des blocs à l'intérieur via « + Dans la boucle ».",
+            style="Dim.TLabel",
+            wraplength=300,
+        ).pack(anchor="w", pady=(6, 0))
+
+        # -- Sous-panneau boucle Tant que --
+        while_frame = ttk.Frame(value_container, style="TFrame")
+        ttk.Label(while_frame, text="Condition").pack(anchor="w")
+        while_default_cond = WHILE_COND_ALWAYS
+        while_default_key = ""
+        if existing_block and existing_block.get("command") == "while":
+            wv = existing_block.get("value", {})
+            if wv.get("condition") == "key_held":
+                while_default_cond = WHILE_COND_KEY_HELD
+                while_default_key = wv.get("key", "")
+        while_condition_var = tk.StringVar(value=while_default_cond)
+        while_combo = ttk.Combobox(
+            while_frame, textvariable=while_condition_var, state="readonly",
+            values=[WHILE_COND_ALWAYS, WHILE_COND_KEY_HELD], style="TCombobox",
+        )
+        while_combo.pack(fill="x", pady=(4, 8))
+
+        while_key_frame = ttk.Frame(while_frame, style="TFrame")
+        ttk.Label(while_key_frame, text="Touche à surveiller").pack(anchor="w")
+        while_key_row = ttk.Frame(while_key_frame, style="TFrame")
+        while_key_row.pack(fill="x", pady=(4, 0))
+        while_key_var = tk.StringVar(value=while_default_key)
+        ttk.Entry(while_key_row, textvariable=while_key_var).pack(side="left", fill="x", expand=True)
+
+        def capture_while_key():
+            while_capture_btn.configure(text="Appuie sur une touche...")
+            dialog.update()
+
+            def capture():
+                try:
+                    new_key = kb.read_hotkey(suppress=False)
+                except Exception:
+                    new_key = while_key_var.get()
+                dialog.after(0, lambda: _finish_capture(new_key))
+
+            def _finish_capture(new_key):
+                while_key_var.set(new_key)
+                while_capture_btn.configure(text="Capturer")
+
+            threading.Thread(target=capture, daemon=True).start()
+
+        while_capture_btn = ttk.Button(
+            while_key_row, text="Capturer", style="Ghost.TButton", command=capture_while_key
+        )
+        while_capture_btn.pack(side="left", padx=(6, 0))
+
+        def show_while_key_row(*_):
+            if while_condition_var.get() == WHILE_COND_KEY_HELD:
+                while_key_frame.pack(fill="x")
+            else:
+                while_key_frame.pack_forget()
+
+        while_combo.bind("<<ComboboxSelected>>", show_while_key_row)
+        show_while_key_row()
+
+        ttk.Label(
+            while_frame,
+            text="Ajoute ensuite des blocs à l'intérieur via « + Dans la boucle ».",
+            style="Dim.TLabel",
+            wraplength=300,
+        ).pack(anchor="w", pady=(6, 0))
+
         panels = {
             BLOCK_TYPE_KEYBOARD: key_frame,
             BLOCK_TYPE_MOUSE: mouse_frame,
             BLOCK_TYPE_MOUSEMOVE: mousemove_frame,
             BLOCK_TYPE_DELAY: delay_frame,
+            BLOCK_TYPE_FOR: for_frame,
+            BLOCK_TYPE_WHILE: while_frame,
         }
 
         def show_panel(*_):
@@ -979,6 +1173,31 @@ class AutoClickerApp:
                     error_label.configure(text="Coordonnées invalides.")
                     return
                 block = {"command": "mousemove", "value": {"x": mx, "y": my}}
+            elif selected_type == BLOCK_TYPE_FOR:
+                try:
+                    count = int(for_count_var.get().strip())
+                    if count < 1:
+                        raise ValueError
+                except ValueError:
+                    error_label.configure(text="Nombre d'itérations invalide.")
+                    return
+                nested = []
+                if existing_block and existing_block.get("command") == "for":
+                    nested = existing_block.get("value", {}).get("blocks", [])
+                block = {"command": "for", "value": {"count": count, "blocks": nested}}
+            elif selected_type == BLOCK_TYPE_WHILE:
+                key_held = while_condition_var.get() == WHILE_COND_KEY_HELD
+                key_value = while_key_var.get().strip()
+                if key_held and not key_value:
+                    error_label.configure(text="Indique une touche à surveiller.")
+                    return
+                nested = []
+                if existing_block and existing_block.get("command") == "while":
+                    nested = existing_block.get("value", {}).get("blocks", [])
+                value = {"condition": "key_held" if key_held else "always", "blocks": nested}
+                if key_held:
+                    value["key"] = key_value
+                block = {"command": "while", "value": value}
             else:
                 try:
                     ms = int(delay_var.get().strip())
@@ -990,9 +1209,9 @@ class AutoClickerApp:
                 block = {"command": "delay", "value": str(ms)}
 
             if editing:
-                self.current_blocks[edit_index] = block
+                target_list[edit_index] = block
             else:
-                self.current_blocks.append(block)
+                target_list.append(block)
             self._refresh_macro_tree()
             dialog.destroy()
 
