@@ -269,12 +269,6 @@ def on_click(x, y, button, pressed):
         else:
             holding[button] = False
 
-    elif click_mode == MODE_MACRO:
-        if not pressed:
-            return
-        blocks = list(app_instance.current_blocks) if app_instance else []
-        start_macro_run(blocks)
-
 
 mouse_listener = mouse.Listener(on_click=on_click)
 mouse_listener.start()
@@ -285,12 +279,12 @@ threading.Thread(target=auto_clicker_worker, daemon=True).start()
 # ---------------------------------------------------------------------------
 # Interface graphique
 # ---------------------------------------------------------------------------
-BLOCK_TYPE_KEYBOARD = "Simuler une touche du clavier"
-BLOCK_TYPE_MOUSE = "Simuler une touche de la souris"
+BLOCK_TYPE_KEYBOARD = "Appuyer sur touche du clavier"
+BLOCK_TYPE_MOUSE = "Appuyer sur touche de la souris"
 BLOCK_TYPE_MOUSEMOVE = "Déplacer la souris"
-BLOCK_TYPE_DELAY = "Attendre ? millisecondes"
-BLOCK_TYPE_FOR = "Répéter ? fois"
-BLOCK_TYPE_WHILE = "Répéter"
+BLOCK_TYPE_DELAY = "Attendre (ms)"
+BLOCK_TYPE_FOR = "Boucle Pour (For)"
+BLOCK_TYPE_WHILE = "Boucle Tant que (While)"
 BLOCK_TYPES = [
     BLOCK_TYPE_KEYBOARD,
     BLOCK_TYPE_MOUSE,
@@ -734,9 +728,9 @@ class AutoClickerApp:
         ttk.Label(
             frame,
             text=(
-                "En mode actif, un clic (gauche ou droit) exécute la macro sélectionnée. "
-                "Sélectionne une boucle puis clique « + Dans la boucle » pour ajouter des "
-                "blocs à l'intérieur. « Arrêter » interrompt une boucle en cours."
+                "Appuie sur le raccourci d'activation (ou le bouton) pour démarrer la macro "
+                "sélectionnée ; appuie de nouveau pour l'arrêter. Sélectionne une boucle puis "
+                "clique « + Dans la boucle » pour ajouter des blocs à l'intérieur."
             ),
             style="Dim.TLabel",
             wraplength=340,
@@ -1241,6 +1235,9 @@ class AutoClickerApp:
 
     def toggle_active(self):
         global auto_clicker_active
+        if click_mode == MODE_MACRO:
+            self.toggle_macro_run()
+            return
         auto_clicker_active = not auto_clicker_active
         if not auto_clicker_active:
             # On coupe proprement les modes en cours (maintien / salves).
@@ -1248,7 +1245,19 @@ class AutoClickerApp:
                 holding[b] = False
         self._refresh_status()
 
+    def toggle_macro_run(self):
+        if macro_lock.locked():
+            stop_running_macro()
+        else:
+            start_macro_run(list(self.current_blocks), respect_toggle=False)
+        self._refresh_status()
+
     def _refresh_status(self):
+        if click_mode == MODE_MACRO:
+            running = macro_lock.locked()
+            self.status_dot.itemconfig(self.dot_id, fill=GREEN if running else RED)
+            self.status_label.configure(text="Macro en cours" if running else "Macro arrêtée")
+            return
         if auto_clicker_active:
             self.status_dot.itemconfig(self.dot_id, fill=GREEN)
             self.status_label.configure(text="Activé")
@@ -1259,8 +1268,11 @@ class AutoClickerApp:
     # --- Mode ------------------------------------------------------------
     def _on_mode_selected(self, event=None):
         global click_mode
+        previous_mode = click_mode
         label = self.mode_var.get()
         click_mode = LABEL_TO_MODE.get(label, click_mode)
+        if previous_mode == MODE_MACRO and click_mode != MODE_MACRO:
+            stop_running_macro()
         for b in holding:
             holding[b] = False
         self._sync_mode_ui()
@@ -1268,6 +1280,11 @@ class AutoClickerApp:
     def _sync_mode_ui(self):
         self.mode_var.set(MODE_LABELS[click_mode])
         self.mode_frames[click_mode].tkraise()
+        if click_mode == MODE_MACRO:
+            self.toggle_btn.configure(text="Démarrer/Arrêter la macro (ou appuyer sur la touche)")
+        else:
+            self.toggle_btn.configure(text="Activer  (ou appuyer sur la touche)")
+        self._refresh_status()
 
     def _update_mouse_position(self):
         if click_mode == MODE_MACRO:
@@ -1276,12 +1293,16 @@ class AutoClickerApp:
                 self.mouse_pos_label.configure(text=f"Position souris : {x}, {y}")
             except Exception:
                 pass
+            self._refresh_status()
         self.root.after(100, self._update_mouse_position)
 
     def cycle_mode(self):
         global click_mode
+        previous_mode = click_mode
         idx = MODES.index(click_mode)
         click_mode = MODES[(idx + 1) % len(MODES)]
+        if previous_mode == MODE_MACRO and click_mode != MODE_MACRO:
+            stop_running_macro()
         for b in holding:
             holding[b] = False
         self._sync_mode_ui()
