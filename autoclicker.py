@@ -4,7 +4,47 @@ import json
 import threading
 import time
 
-import pyautogui
+
+import ctypes
+from ctypes import wintypes
+
+user32=ctypes.windll.user32
+
+class POINT(ctypes.Structure):
+    _fields_=[("x",wintypes.LONG),("y",wintypes.LONG)]
+
+INPUT_MOUSE=0
+MOUSEEVENTF_LEFTDOWN=0x0002
+MOUSEEVENTF_LEFTUP=0x0004
+MOUSEEVENTF_RIGHTDOWN=0x0008
+MOUSEEVENTF_RIGHTUP=0x0010
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_=[("dx",wintypes.LONG),("dy",wintypes.LONG),("mouseData",wintypes.DWORD),("dwFlags",wintypes.DWORD),("time",wintypes.DWORD),("dwExtraInfo",ctypes.POINTER(ctypes.c_ulong))]
+class INPUT(ctypes.Structure):
+    _fields_=[("type",wintypes.DWORD),("mi",MOUSEINPUT)]
+def _send(flags):
+    inp=INPUT(type=INPUT_MOUSE,mi=MOUSEINPUT(0,0,0,flags,0,None))
+    user32.SendInput(1,ctypes.byref(inp),ctypes.sizeof(INPUT))
+class pyautogui:
+    PAUSE=0
+    FAILSAFE=False
+    @staticmethod
+    def leftClick():
+        _send(MOUSEEVENTF_LEFTDOWN);_send(MOUSEEVENTF_LEFTUP)
+    @staticmethod
+    def rightClick():
+        _send(MOUSEEVENTF_RIGHTDOWN);_send(MOUSEEVENTF_RIGHTUP)
+    @staticmethod
+    def click(button="left"):
+        (pyautogui.leftClick if button=="left" else pyautogui.rightClick)()
+    @staticmethod
+    def moveTo(x,y):
+        user32.SetCursorPos(int(x),int(y))
+    @staticmethod
+    def position():
+        p=POINT();user32.GetCursorPos(ctypes.byref(p));return p.x,p.y
+
 import keyboard as kb
 import tkinter as tk
 from tkinter import ttk, messagebox
