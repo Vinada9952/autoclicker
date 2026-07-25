@@ -35,6 +35,10 @@ Un utilitaire Python complet pour automatiser des clics de souris et des macros 
 pip install pyautogui keyboard pynput
 ```
 
+#### OU
+
+Éxécuter le fichier `.exe`
+
 ## Utilisation
 
 ### Démarrage
@@ -110,18 +114,18 @@ Exécute des séquences d'actions complexes (clavier, souris, délais, boucles).
 - Cette application contrôle automatiquement votre souris et votre clavier.
 - **Testez vos macros d'abord** avec le bouton "Tester" avant utilisation intensive.
 - Vérifiez que les clics/actions sont bien ciblés avant de lancer.
-- La failsafe de pyautogui est désactivée ; utilisez Alt+F4 pour arrêter rapidement si nécessaire.
+- La failsafe de pyautogui est désactivée ; utilisez Alt+F4 dans la fenêtre de l'application pour arrêter rapidement si nécessaire.
 
 ## Persistance des macros
 
 Les macros sont automatiquement sauvegardées dans :
 ```
-%APPDATA%/AutoClicker/macros.json
+%APPDATA%/SmartAutoClicker/macros.json
 ```
 
 Sur Windows, ce chemin correspond généralement à :
 ```
-C:\Users\[VotreNom]\AppData\Roaming\AutoClicker\macros.json
+C:\Users\[VotreNom]\AppData\Roaming\SmartAutoClicker\macros.json
 ```
 
 Vous pouvez supprimer ce fichier pour réinitialiser toutes les macros.
