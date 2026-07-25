@@ -31,14 +31,18 @@ class pyautogui:
     @staticmethod
     def leftClick():
         # _send(MOUSEEVENTF_LEFTDOWN);_send(MOUSEEVENTF_LEFTUP)
+        pydirectinput.mouseUp()
         pydirectinput.mouseDown()
-    time.sleep( 0.0000000001 )
-    pydirectinput.mouseUp()
+        time.sleep( 0.001 )
+        pydirectinput.mouseUp()
+        pydirectinput.mouseUp()
     @staticmethod
     def rightClick():
         # _send(MOUSEEVENTF_RIGHTDOWN);_send(MOUSEEVENTF_RIGHTUP)
+        pydirectinput.mouseUp( button="right" )
         pydirectinput.mouseDown( button="right" )
-        time.sleep( 0.0000000001 )
+        time.sleep( 0.001 )
+        pydirectinput.mouseUp( button="right" )
         pydirectinput.mouseUp( button="right" )
     @staticmethod
     def click(button="left"):
@@ -215,7 +219,12 @@ def _execute_block(block, respect_toggle):
     val = block.get("value")
     try:
         if cmd == "keyboard":
-            kb.send(val)
+            # kb.send(val)
+            pydirectinput.keyDown( val )
+            pydirectinput.keyUp( val )
+            time.sleep( 0.001 )
+            pydirectinput.keyDown( val )
+            pydirectinput.keyDown( val )
         elif cmd == "mouse":
             pyautogui.click(button="left" if val == "left" else "right")
         elif cmd == "mousemove":
