@@ -3,12 +3,9 @@ import os
 import json
 import threading
 import time
-import traceback
+import pydirectinput
 import ctypes
 from ctypes import wintypes
-from pynput.mouse import Controller as MouseController, Button
-
-mouse_controller = MouseController()
 
 user32=ctypes.windll.user32
 
@@ -34,13 +31,15 @@ class pyautogui:
     @staticmethod
     def leftClick():
         # _send(MOUSEEVENTF_LEFTDOWN);_send(MOUSEEVENTF_LEFTUP)
-        mouse_controller.press( Button.left )
-        mouse_controller.release( Button.left )
+        pydirectinput.mouseDown()
+    time.sleep( 0.0000000001 )
+    pydirectinput.mouseUp()
     @staticmethod
     def rightClick():
         # _send(MOUSEEVENTF_RIGHTDOWN);_send(MOUSEEVENTF_RIGHTUP)
-        mouse_controller.press( Button.right )
-        mouse_controller.release( Button.right )
+        pydirectinput.mouseDown( button="right" )
+        time.sleep( 0.0000000001 )
+        pydirectinput.mouseUp( button="right" )
     @staticmethod
     def click(button="left"):
         (pyautogui.leftClick if button=="left" else pyautogui.rightClick)()
@@ -243,7 +242,7 @@ def _execute_block(block, respect_toggle):
                 run_macro(nested, respect_toggle)
     except Exception:
         # Une touche/valeur invalide ne doit pas planter le thread.
-        traceback.print_exc()
+        pass
 
 
 def run_macro(blocks, respect_toggle=True):
@@ -329,8 +328,8 @@ BLOCK_TYPE_KEYBOARD = "Appuyer sur touche du clavier"
 BLOCK_TYPE_MOUSE = "Appuyer sur touche de la souris"
 BLOCK_TYPE_MOUSEMOVE = "Déplacer la souris"
 BLOCK_TYPE_DELAY = "Attendre (ms)"
-BLOCK_TYPE_FOR = "Boucle Pour (For)"
-BLOCK_TYPE_WHILE = "Boucle Tant que (While)"
+BLOCK_TYPE_FOR = "Répéter x fois"
+BLOCK_TYPE_WHILE = "Répéter indéfiniment"
 BLOCK_TYPES = [
     BLOCK_TYPE_KEYBOARD,
     BLOCK_TYPE_MOUSE,
@@ -1338,7 +1337,7 @@ class AutoClickerApp:
                 x, y = pyautogui.position()
                 self.mouse_pos_label.configure(text=f"Position souris : {x}, {y}")
             except Exception:
-                traceback.print_exc()
+                pass
             self._refresh_status()
         self.root.after(100, self._update_mouse_position)
 
